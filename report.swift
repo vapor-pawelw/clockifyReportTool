@@ -323,27 +323,27 @@ final class HelpAction: CommandAction {
             Available commands:
               * Help: -h, help, -help, --help
               * Query available workspaces: -w, --workspaces
-              * Query available projects: NOT YET AVAILABLE
+              * Query available projects: -p, --projects
               * Report time: -r, --report
             
                 Description:
-                   Report time. Workspace is taken either from the argument or from contents of a "workspace" file in the same directory. If none is provided, default hardcoded workspace is used.
+                   Report time using `-r` or `--report` command.
                 
                 Example:
                   ./report.swift -r 9-18 "Remote work"
-                      Report "Remote work" today from 9 AM to 6 PM
+                      Report "Remote work" today from 9 AM to 6 PM. Workspace and project must be already specified in config.json file.
                   ./report.swift -r 9:30-18:40 03.06 Meetings
-                      Report "Meetings" from 9:30 AM to 6:40 PM on 03.06 this year
+                      Report "Meetings" from 9:30 AM to 6:40 PM on 03.06 this year. Workspace and project must be already specified in config.json file.
                   ./report.swift --workspace=myWorkspace --project=myProject -r 10-18:20 "Busy as hell"
-                      Report "Busy as hell" today from 10:00 AM to 18:20 PM in "myWorkspace" workspace & in project named "myProject"
+                      Report "Busy as hell" today from 10:00 AM to 6:20 PM in "myWorkspace" workspace & in project named "myProject"
             
                 Parameters:
                   <time> (required)
                       Must be provided immediately after the command. Minutes are optional. The time must be in 24h format
-                  <project> (required)
-                      Must be provided as the last parameter. Does not need quotes if it does not contain spaces.
                   [date] (optional) (default: today)
                       Specify date of the report
+                  <message> (required)
+                      Must be provided as the last parameter. Does not need quotes if it does not contain spaces.
             
             Configuration parameters:
                 [\(getArgNames(for: .workspaceID))]
