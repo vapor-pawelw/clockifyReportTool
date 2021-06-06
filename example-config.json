@@ -1,0 +1,6 @@
+{
+  "apiKey": "<apiKey>", // required
+  "workspaceID": "<workspace ID>", // optional. See workspaces with --workspaces arg.
+  "projectID": "<project ID>" // optional. See projects with --projects arg (requires workspace to be specified)
+}
+
