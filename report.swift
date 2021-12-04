@@ -130,12 +130,15 @@ struct Argument {
         case projectName
         case projectID
         
+        case skipWeekends
+        
         var matchingNames: Set<String> {
             switch self {
             case .workspaceName: return ["-wname", "--workspace", "--workspace-name"]
             case .workspaceID: return ["-wid", "--workspaceid", "--workspace-id"]
             case .projectName: return ["-pname", "--project", "--project-name"]
             case .projectID: return ["-pid", "--projectid", "--project-id"]
+            case .skipWeekends: return ["-sw", "--skip-weekends"]
             }
         }
     }
@@ -332,16 +335,16 @@ final class HelpAction: CommandAction {
                 Example:
                   ./report.swift -r 9-18 "Remote work"
                       Report "Remote work" today from 9 AM to 6 PM. Workspace and project must be already specified in config.json file.
-                  ./report.swift -r 9:30-18:40 03.06 Meetings
-                      Report "Meetings" from 9:30 AM to 6:40 PM on 03.06 this year. Workspace and project must be already specified in config.json file.
+                  ./report.swift -r 9:30-18:40 03.06-05.06 -sw Meetings
+                      Report "Meetings" from 9:30 AM to 6:40 PM on 03.06 until 05.06, skipping saturdays&sundays, this year. Workspace and project must be already specified in config.json file.
                   ./report.swift --workspace=myWorkspace --project=myProject -r 10-18:20 "Busy as hell"
                       Report "Busy as hell" today from 10:00 AM to 6:20 PM in "myWorkspace" workspace & in project named "myProject"
             
                 Parameters:
                   <time> (required)
                       Must be provided immediately after the command. Minutes are optional. The time must be in 24h format
-                  [date] (optional) (default: today)
-                      Specify date of the report
+                  [date or date range] (optional) (default: today)
+                      Specify date of the report. Can also take a form of date range, separated with "-", e.g. 24.05-29.05
                   <message> (required)
                       Must be provided as the last parameter. Does not need quotes if it does not contain spaces.
             
@@ -354,6 +357,8 @@ final class HelpAction: CommandAction {
                     Specify project ID in key=value format.
                 [\(getArgNames(for: .projectName))]
                     Specify project name in key=value format.
+                [\(getArgNames(for: .skipWeekends))]
+                    Skip saturdays & sundays when reporting.
             """)
         
         finishApp()
@@ -361,16 +366,19 @@ final class HelpAction: CommandAction {
 }
 
 struct TimeRange: CustomStringConvertible {
-    let dateFrom: Date
-    let dateTo: Date
+    let dateRanges: [(from: Date, to: Date)]
     
     var description: String {
-        return "<Range from \(dateFrom) to \(dateTo)>"
+        let ranges = dateRanges
+            .map { (dateFrom, dateTo) -> String in
+                "\(dateFrom)-\(dateTo)"
+            }
+            .joined(separator: ", ")
+        
+        return "<Ranges: \(ranges)>"
     }
     
-    private static var currentDateComps: DateComponents {
-        Calendar.current.dateComponents([.year, .month, .day], from: Date())
-    }
+    private static let currentDateComps = Calendar.current.dateComponents([.year, .month, .day], from: Date())
     
     init?(from arguments: [String]) {
         guard arguments.count >= 3 else { return nil }
@@ -385,21 +393,51 @@ struct TimeRange: CustomStringConvertible {
         let timeFromString = rangeStrings[0]
         let timeToString = rangeStrings[1]
         
-        let dateComps = Self.parseDate(dateString)
+        let dateStrings = dateString.components(separatedBy: "-")
+        
+        let dateFromString: String
+        let dateToString: String
+        
+        if dateStrings.count == 2 {
+            dateFromString = dateStrings[0]
+            dateToString = dateStrings[1]
+        } else {
+            dateFromString = dateString
+            dateToString = dateString
+        }
+        
+        let dateRange = Self.parseDateRange(from: dateFromString, to: dateToString)
         
         guard let timeFrom = Self.parseTime(timeFromString),
               let timeTo = Self.parseTime(timeToString) else {
             return nil
         }
         
-        let fromComps = DateComponents(year: dateComps.year, month: dateComps.month, day: dateComps.day, hour: timeFrom.hour, minute: timeFrom.minute, second: 0, nanosecond: 0)
-        let toComps = DateComponents(year: dateComps.year, month: dateComps.month, day: dateComps.day, hour: timeTo.hour, minute: timeTo.minute, second: 0, nanosecond: 0)
+        guard let startDate = Calendar.current.date(from: dateRange.from),
+              let endDate = Calendar.current.date(from: dateRange.to) else { return nil }
         
-        guard let dateFrom = Calendar.current.date(from: fromComps),
-              let dateTo = Calendar.current.date(from: toComps) else { return nil }
+        var dateRanges = [(from: Date, to: Date)]()
+        var currentDate = startDate
         
-        self.dateFrom = dateFrom
-        self.dateTo = dateTo
+        while currentDate <= endDate {
+            let comps = Calendar.current.dateComponents([.year, .month, .day], from: currentDate)
+            
+            let fromComps = DateComponents(year: comps.year, month: comps.month, day: comps.day, hour: timeFrom.hour, minute: timeFrom.minute, second: 0, nanosecond: 0)
+            let toComps = DateComponents(year: comps.year, month: comps.month, day: comps.day, hour: timeTo.hour, minute: timeTo.minute, second: 0, nanosecond: 0)
+            
+            guard let dateFrom = Calendar.current.date(from: fromComps),
+                  let dateTo = Calendar.current.date(from: toComps) else { return nil }
+            
+            dateRanges.append((from: dateFrom, to: dateTo))
+            
+            guard let nextDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) else {
+                break
+            }
+            
+            currentDate = nextDate
+        }
+        
+        self.dateRanges = dateRanges
     }
     
     private static func parseTime(_ timeString: String) -> (hour: Int, minute: Int)? {
@@ -423,14 +461,34 @@ struct TimeRange: CustomStringConvertible {
         }
     }
     
-    private static func parseDate(_ dateString: String) -> (year: Int, month: Int, day: Int) {
+    private static func parseDateRange(from fromString: String, to toString: String) -> (from: DateComponents, to: DateComponents) {
+        let dateFromComps = Self.parseDate(fromString)
+        let dateToComps = Self.parseDate(toString)
+        
+        let dateFromComps2 = (year: dateFromComps.year ?? dateToComps.year ?? currentDateComps.year!,
+                              month: dateFromComps.month ?? dateToComps.month ?? currentDateComps.month!,
+                              day: dateFromComps.day ?? currentDateComps.day!)
+        
+        let dateToComps2 = (year: dateToComps.year ?? currentDateComps.year!,
+                            month: dateToComps.month ?? currentDateComps.month!,
+                            day: dateToComps.day ?? currentDateComps.day!)
+        
+        let dateDayFromComps = DateComponents(year: dateFromComps2.year, month: dateFromComps2.month, day: dateFromComps2.day, hour: 0, minute: 0, second: 0, nanosecond: 0)
+        let dateDayToComps = DateComponents(year: dateToComps2.year, month: dateToComps2.month, day: dateToComps2.day, hour: 0, minute: 0, second: 0, nanosecond: 0)
+        
+        return (from: dateDayFromComps, to: dateDayToComps)
+    }
+    
+    private static func parseDate(_ dateString: String) -> (year: Int?, month: Int?, day: Int?) {
         let df = DateFormatter()
         let format = DateFormatter.dateFormat(fromTemplate: "ddMM", options: 0, locale: .current)
         df.dateFormat = format
         
-        if let simpleDate = df.date(from: dateString) {
+        if let day = Int(dateString) {
+            return (year: nil, month: nil, day: day)
+        } else if let simpleDate = df.date(from: dateString) {
             let comps = Calendar.current.dateComponents([.month, .day], from: simpleDate)
-            return (year: currentDateComps.year!, month: comps.month!, day: comps.day!)
+            return (year: nil, month: comps.month!, day: comps.day!)
         } else {
             let format = DateFormatter.dateFormat(fromTemplate: "ddMMyyyy", options: 0, locale: .current)
             df.dateFormat = format
@@ -439,7 +497,7 @@ struct TimeRange: CustomStringConvertible {
                 let comps = Calendar.current.dateComponents([.year, .month, .day], from: fullDate)
                 return (year: comps.year!, month: comps.month!, day: comps.day!)
             } else {
-                return (year: currentDateComps.year!, month: currentDateComps.month!, day: currentDateComps.day!)
+                return (year: nil, month: nil, day: nil)
             }
         }
     }
@@ -470,44 +528,91 @@ final class ReportAction: CommandAction {
     }
     
     private func perform(withWorkspaceID id: String, projectID: String, timeRange: TimeRange, message: String) {
+        guard
+            let firstDateRange = timeRange.dateRanges.first,
+            let lastDateRange = timeRange.dateRanges.last
+        else {
+            print("No dates specified, aborting.")
+            exit(1)
+        }
+        
         let fmt = DateFormatter()
         fmt.dateStyle = .none
         fmt.timeStyle = .short
         
-        let timeFromString = fmt.string(from: timeRange.dateFrom)
-        let timeToString = fmt.string(from: timeRange.dateTo)
+        let timeFromString = fmt.string(from: firstDateRange.from)
+        let timeToString = fmt.string(from: lastDateRange.to)
         
         fmt.dateStyle = .medium
         fmt.timeStyle = .none
         
-        // dateFrom == dateTo so whatever
-        let dateString = fmt.string(from: timeRange.dateFrom)
+        let dateFromString = fmt.string(from: firstDateRange.from)
+        
+        var dateString: String
+        if Calendar.current.isDate(firstDateRange.from, inSameDayAs: lastDateRange.to) {
+            dateString = dateFromString
+        } else {
+            let dateToString = fmt.string(from: lastDateRange.to)
+            dateString = "\(dateFromString) - \(dateToString)"
+        }
+        
+        let skipWeekends = arguments.contains(where: { Argument.Key.skipWeekends.matchingNames.contains($0) })
+        
+        if skipWeekends {
+            dateString += " (skip weekends)"
+        }
         
         print("""
               Summary:
                 - From: \(timeFromString)
                 - To: \(timeToString)
-                - Date: \(dateString)
+                - Dates: \(dateString)
                 - Message: \(message)
               """)
         print("Type 'y' to report.")
+        
         let confirm = readLine()
         
         guard confirm?.caseInsensitiveCompare("y") == .orderedSame else {
             exit(code: .unconfirmedReport)
         }
         
-        let data = Requests.AddTimeEntry(start: timeRange.dateFrom,
-                                         end: timeRange.dateTo,
-                                         description: message,
-                                         projectId: projectID)
-        
-        Networking.post(.addEntry(workspaceID: id), data: data, description: "Sending report...") { error in
-            if let error = error {
-                exit(code: .addEntryRequestFailed(error))
+        let requests = timeRange.dateRanges.compactMap { dateFrom, dateTo -> Requests.AddTimeEntry? in
+            let weekday = Calendar.current.dateComponents([.weekday], from: dateFrom).weekday
+            let isWeekend = [1, 7].contains(weekday)
+                
+            if isWeekend && skipWeekends {
+                print("Skipping \(dateFrom) - weekend.")
+                return nil
+            } else {
+                return Requests.AddTimeEntry(start: dateFrom,
+                                             end: dateTo,
+                                             description: message,
+                                             projectId: projectID)
             }
-            
-            print("Time reported successfully! Finishing.")
+        }
+        
+        var sentCount = 0
+        var sendError: Error?
+        
+        print("Sending reports...")
+        
+        requests.forEach { request in
+            Networking.post(.addEntry(workspaceID: id), data: request) { error in
+                sentCount += 1
+                
+                if error != nil {
+                    sendError = error
+                }
+            }
+        }
+        
+        while sentCount != requests.count {}
+        
+        if let error = sendError {
+            exit(code: .addEntryRequestFailed(error))
+        } else {
+            print("Reports sent successfully.")
             finishApp()
         }
     }
